@@ -32,6 +32,7 @@ let formErrors = { form: {}, questions: {} };
 let setupNotice = "";
 let setupError = "";
 let isLoadingForms = false;
+let setupSearchQuery = "";
 let previewForm = null;
 let previewReturnMode = "list";
 const confirmedAppointment = {
@@ -41,10 +42,9 @@ const confirmedAppointment = {
   serviceName: "Color Retouch",
   date: "May 30, 2026",
   time: "10:30 AM",
-  requiredFormIds: ["form-client-intake", "form-color-consultation"],
+  requiredFormIds: ["form-client-intake", "form-color-consultation", "form-service-consent-signature"],
 };
 let activeAppointmentFormId = "";
-let appointmentNotice = "";
 let appointmentErrors = {};
 let appointmentResponses = {};
 let updatingPreviousForms = new Set();
@@ -85,6 +85,20 @@ function getNextIncompleteFormId(currentFormId = "") {
   const nextForm = [...afterCurrent, ...beforeCurrent].find((form) => !appointmentResponses[form.id]);
 
   return nextForm?.id || "";
+}
+
+function getLastCompletedFormId(currentFormId = "") {
+  const requiredForms = getRequiredAppointmentForms();
+  const currentIndex = requiredForms.findIndex((form) => form.id === currentFormId);
+  const completedBeforeCurrent = currentIndex > 0
+    ? requiredForms.slice(0, currentIndex).filter((form) => appointmentResponses[form.id])
+    : [];
+  const completedForms = completedBeforeCurrent.length
+    ? completedBeforeCurrent
+    : requiredForms.filter((form) => form.id !== currentFormId && appointmentResponses[form.id]);
+  const lastCompletedForm = completedForms[completedForms.length - 1];
+
+  return lastCompletedForm?.id || "";
 }
 
 function shouldReviewOnly(form) {
@@ -176,10 +190,31 @@ function renderFormsListContent() {
     `;
   }
 
+  const visibleForms = forms.filter((form) =>
+    form.name.toLowerCase().includes(setupSearchQuery.trim().toLowerCase()),
+  );
+
   return `
-    <div class="forms-list">
-      ${forms.map(renderFormRow).join("")}
+    <div class="list-tools">
+      <label class="search-field">
+        <span>Search forms</span>
+        <input data-search-forms value="${escapeHtml(setupSearchQuery)}" placeholder="Search by form name">
+      </label>
     </div>
+    ${
+      visibleForms.length === 0
+        ? `
+          <div class="empty-state">
+            <strong>No matching forms.</strong>
+            <p>Try a different form name.</p>
+          </div>
+        `
+        : `
+    <div class="forms-list">
+      ${visibleForms.map(renderFormRow).join("")}
+    </div>
+        `
+    }
   `;
 }
 
@@ -192,11 +227,25 @@ function renderFormRow(form) {
         <span>Last updated ${formatUpdatedDate(form.updatedAt)}</span>
       </div>
       <div class="row-actions">
-        <button data-action="preview-form" data-form-id="${form.id}">Preview</button>
-        <button data-action="edit-form" data-form-id="${form.id}">Edit</button>
-        <button class="danger" data-action="delete-form" data-form-id="${form.id}">Delete</button>
+        <button data-action="preview-form" data-form-id="${form.id}">${renderButtonIcon("preview")}Preview</button>
+        <button data-action="edit-form" data-form-id="${form.id}">${renderButtonIcon("edit")}Edit</button>
+        <button class="danger" data-action="delete-form" data-form-id="${form.id}">${renderButtonIcon("delete")}Delete</button>
       </div>
     </article>
+  `;
+}
+
+function renderButtonIcon(type) {
+  const icons = {
+    preview: '<circle cx="12" cy="12" r="3.5"></circle><path d="M3 12s3.2-6 9-6 9 6 9 6-3.2 6-9 6-9-6-9-6Z"></path>',
+    edit: '<path d="M4 20h4l10.5-10.5-4-4L4 16v4Z"></path><path d="m13.5 6.5 4 4"></path>',
+    delete: '<path d="M6 6 18 18"></path><path d="m18 6-12 12"></path>',
+  };
+
+  return `
+    <svg class="button-icon" aria-hidden="true" viewBox="0 0 24 24">
+      ${icons[type]}
+    </svg>
   `;
 }
 
@@ -228,6 +277,11 @@ function renderFormBuilder() {
           <input type="checkbox" data-field="require-only-once" ${formDraft.requireOnlyOnce ? "checked" : ""}>
           Require only once
           <span>Clients with a previous completed version only review and confirm their saved information.</span>
+        </label>
+        <label class="toggle setting-toggle">
+          <input type="checkbox" data-field="require-signature" ${formDraft.requireSignature ? "checked" : ""}>
+          Request signature
+          <span>Clients must type their signature before submitting this form.</span>
         </label>
       </section>
 
@@ -263,6 +317,7 @@ function renderFormPreview() {
             ? form.questions.map(renderPreviewQuestion).join("")
             : `<div class="state-panel">No questions to preview yet.</div>`
         }
+        ${form.requireSignature ? renderSignatureField({ mode: "preview" }) : ""}
       </section>
     </section>
   `;
@@ -324,13 +379,12 @@ function renderAppointmentForms() {
     <section class="workspace">
       <div class="workspace-header">
         <div>
-          <p class="eyebrow">Confirmed service</p>
           <h2>Intake Forms</h2>
+          <p class="eyebrow">Confirmed service</p>
           <p>${escapeHtml(confirmedAppointment.clientName)} is booked for ${escapeHtml(confirmedAppointment.serviceName)} on ${escapeHtml(appointmentDateTime())}.</p>
         </div>
         <div class="completion-pill">${completedCount} of ${requiredForms.length} complete</div>
       </div>
-      ${appointmentNotice ? `<div class="notice">${escapeHtml(appointmentNotice)}</div>` : ""}
       ${
         allDone
           ? renderAllDone(requiredForms)
@@ -370,8 +424,9 @@ function renderCompletedFormChip(form, includeAction = false) {
   return `
     <article class="completed-chip">
       <strong>${escapeHtml(form.name)}</strong>
+      ${includeAction ? `<span>Complete</span>` : ""}
       <span>${escapeHtml(status)}</span>
-      ${includeAction ? `<button data-appointment-action="open-form" data-form-id="${form.id}">Review and change</button>` : ""}
+      ${includeAction ? `<button data-appointment-action="open-form" data-form-id="${form.id}">Edit</button>` : ""}
     </article>
   `;
 }
@@ -398,22 +453,27 @@ function renderClientForm(form) {
   const errors = appointmentErrors[form.id] || {};
   const isChangingPrevious = Boolean(clientProfile.savedResponses[form.id] && updatingPreviousForms.has(form.id));
   const primaryLabel = isChangingPrevious ? "Save changes" : "Save to client profile";
+  const lastCompletedFormId = getLastCompletedFormId(form.id);
 
   return `
     <article class="client-form-card">
       <div class="form-card-header">
         <div>
-          <p class="eyebrow">${isChangingPrevious ? "Update saved information" : "Client form"}</p>
           <h3>${escapeHtml(form.name)}</h3>
+          <p class="eyebrow">${isChangingPrevious ? "Update saved information" : "Client form"}</p>
           ${form.description ? `<p>${escapeHtml(form.description)}</p>` : ""}
         </div>
-        ${renderInlineFormStatus(form)}
       </div>
       <div class="preview-card client-answer-card">
         ${form.questions.map((question, index) => renderClientQuestion(question, index, savedAnswers, errors)).join("")}
+        ${form.requireSignature ? renderSignatureField({ value: savedAnswers.__signature, error: errors.__signature }) : ""}
       </div>
       <div class="builder-actions">
-        <button data-appointment-action="close-form">Cancel</button>
+        ${
+          lastCompletedFormId
+            ? `<button data-appointment-action="edit-last-completed" data-form-id="${lastCompletedFormId}">Back</button>`
+            : ""
+        }
         <button class="primary" data-appointment-action="save-response" data-form-id="${form.id}">${primaryLabel}</button>
       </div>
     </article>
@@ -427,14 +487,14 @@ function renderReviewOnlyForm(form) {
     <article class="client-form-card">
       <div class="form-card-header">
         <div>
-          <p class="eyebrow">Review saved information</p>
           <h3>${escapeHtml(form.name)}</h3>
+          <p class="eyebrow">Review saved information</p>
           <p>Completed on ${formatShortDate(saved.updatedAt)}. Review the information below and confirm whether anything has changed.</p>
         </div>
-        ${renderInlineFormStatus(form)}
       </div>
       <div class="preview-card client-answer-card">
         ${form.questions.map((question, index) => renderSavedAnswer(question, index, saved.answers)).join("")}
+        ${form.requireSignature ? renderSavedSignature(saved.answers.__signature) : ""}
       </div>
       <div class="builder-actions">
         <button data-appointment-action="open-form" data-form-id="${form.id}">Update answers</button>
@@ -442,20 +502,6 @@ function renderReviewOnlyForm(form) {
       </div>
     </article>
   `;
-}
-
-function renderInlineFormStatus(form) {
-  const appointmentResponse = appointmentResponses[form.id];
-  const priorResponse = clientProfile.savedResponses[form.id];
-  const status = appointmentResponse
-    ? appointmentResponse.reviewedAt
-      ? `Reviewed on ${formatShortDate(appointmentResponse.reviewedAt)}`
-      : `Completed on ${formatShortDate(appointmentResponse.submittedAt || appointmentResponse.updatedAt)}`
-    : priorResponse
-      ? `Completed on ${formatShortDate(priorResponse.updatedAt)}`
-      : "Not started";
-
-  return `<div class="inline-status">${escapeHtml(status)}</div>`;
 }
 
 function renderSavedAnswer(question, index, savedAnswers) {
@@ -472,6 +518,17 @@ function renderSavedAnswer(question, index, savedAnswers) {
   `;
 }
 
+function renderSavedSignature(value) {
+  return `
+    <article class="preview-question signature-block">
+      <label>
+        <span>Client signature</span>
+        <div class="saved-answer">${escapeHtml(value || "No signature saved")}</div>
+      </label>
+    </article>
+  `;
+}
+
 function renderClientQuestion(question, index, savedAnswers, errors) {
   return `
     <article class="preview-question">
@@ -479,6 +536,24 @@ function renderClientQuestion(question, index, savedAnswers, errors) {
         <span>${index + 1}. ${escapeHtml(question.text || "Untitled question")}${question.required ? ` <em>*</em>` : ""}</span>
         ${renderClientAnswer(question, savedAnswers[question.id])}
         ${errors[question.id] ? `<span class="field-error">${escapeHtml(errors[question.id])}</span>` : ""}
+      </label>
+    </article>
+  `;
+}
+
+function renderSignatureField({ value = "", error = "", mode = "client" } = {}) {
+  return `
+    <article class="preview-question signature-block">
+      <label>
+        <span>Client signature <em>*</em></span>
+        <input
+          ${mode === "preview" ? "" : `data-client-signature`}
+          value="${escapeHtml(value || "")}"
+          placeholder="Type your full name"
+          ${mode === "preview" ? "" : ""}
+        >
+        <small>Type ${escapeHtml(confirmedAppointment.clientName)} to sign this form.</small>
+        ${error ? `<span class="field-error">${escapeHtml(error)}</span>` : ""}
       </label>
     </article>
   `;
@@ -537,7 +612,6 @@ function renderQuestionEditor(question, index) {
     <article class="question-card" data-question-id="${question.id}">
       <div class="question-header">
         <p class="eyebrow">Question ${index + 1}</p>
-        <button class="danger" data-action="remove-question" data-question-id="${question.id}">Remove</button>
       </div>
       <div class="question-grid">
         <label>
@@ -571,6 +645,9 @@ function renderQuestionEditor(question, index) {
           `
           : ""
       }
+      <div class="question-card-actions">
+        <button class="danger" data-action="remove-question" data-question-id="${question.id}">Remove</button>
+      </div>
     </article>
   `;
 }
@@ -595,6 +672,17 @@ function bindFormSetup() {
       updateDraftField(input.dataset.field, input.type === "checkbox" ? input.checked : input.value);
     });
   });
+
+  const searchInput = app.querySelector("[data-search-forms]");
+  if (searchInput) {
+    searchInput.addEventListener("input", () => {
+      setupSearchQuery = searchInput.value;
+      render();
+      const nextSearchInput = app.querySelector("[data-search-forms]");
+      nextSearchInput?.focus();
+      nextSearchInput?.setSelectionRange(setupSearchQuery.length, setupSearchQuery.length);
+    });
+  }
 
   app.querySelectorAll("[data-question-field]").forEach((input) => {
     input.addEventListener(input.type === "checkbox" ? "change" : "input", () => {
@@ -626,7 +714,13 @@ function handleAppointmentAction(button) {
   if (action === "open-form") {
     updatingPreviousForms.add(formId);
     activeAppointmentFormId = formId;
-    appointmentNotice = "";
+    render();
+  }
+
+  if (action === "edit-last-completed" && form) {
+    updatingPreviousForms.add(form.id);
+    activeAppointmentFormId = form.id;
+    appointmentErrors = {};
     render();
   }
 
@@ -645,14 +739,7 @@ function handleAppointmentAction(button) {
       },
     };
     updatingPreviousForms.delete(form.id);
-    appointmentNotice = `${form.name} reviewed.`;
     activeAppointmentFormId = getNextIncompleteFormId(form.id);
-    render();
-  }
-
-  if (action === "close-form") {
-    activeAppointmentFormId = "";
-    appointmentErrors = {};
     render();
   }
 
@@ -662,7 +749,6 @@ function handleAppointmentAction(button) {
 
     if (Object.keys(errors).length > 0) {
       appointmentErrors = { ...appointmentErrors, [form.id]: errors };
-      appointmentNotice = "";
       render();
       return;
     }
@@ -689,14 +775,13 @@ function handleAppointmentAction(button) {
     };
     updatingPreviousForms.delete(form.id);
     appointmentErrors = {};
-    appointmentNotice = `${form.name} saved to the client's profile.`;
     activeAppointmentFormId = getNextIncompleteFormId(form.id);
     render();
   }
 }
 
 function readClientAnswers(form) {
-  return form.questions.reduce((answers, question) => {
+  const answers = form.questions.reduce((answers, question) => {
     const inputs = [...app.querySelectorAll(`[data-client-question="${question.id}"]`)];
 
     if (question.type === "checkboxes") {
@@ -709,10 +794,16 @@ function readClientAnswers(form) {
 
     return answers;
   }, {});
+
+  if (form.requireSignature) {
+    answers.__signature = app.querySelector("[data-client-signature]")?.value || "";
+  }
+
+  return answers;
 }
 
 function validateClientAnswers(form, answers) {
-  return form.questions.reduce((errors, question) => {
+  const errors = form.questions.reduce((errors, question) => {
     if (!question.required) return errors;
 
     const value = answers[question.id];
@@ -724,6 +815,23 @@ function validateClientAnswers(form, answers) {
 
     return errors;
   }, {});
+
+  if (form.requireSignature) {
+    const signature = String(answers.__signature || "").trim();
+    const expectedSignature = normalizeSignature(confirmedAppointment.clientName);
+
+    if (!signature) {
+      errors.__signature = "Signature is required.";
+    } else if (normalizeSignature(signature) !== expectedSignature) {
+      errors.__signature = `Signature must match ${confirmedAppointment.clientName}.`;
+    }
+  }
+
+  return errors;
+}
+
+function normalizeSignature(value) {
+  return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
 function handleSetupAction(button) {
@@ -857,6 +965,7 @@ function updateDraftField(field, value) {
   if (field === "form-name") formDraft.name = value;
   if (field === "form-description") formDraft.description = value;
   if (field === "require-only-once") formDraft.requireOnlyOnce = value;
+  if (field === "require-signature") formDraft.requireSignature = value;
 }
 
 function findQuestion(questionId) {

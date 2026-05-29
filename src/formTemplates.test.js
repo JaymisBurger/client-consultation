@@ -59,6 +59,24 @@ test("saves the require only once setting", () => {
   assert.equal(forms[0].requireOnlyOnce, true);
 });
 
+test("saves the request signature setting", () => {
+  const draft = {
+    ...createBlankForm(),
+    name: "Consent Form",
+    requireSignature: true,
+  };
+  const forms = saveFormTemplate([], draft, "2026-05-27T14:30:00.000Z");
+
+  assert.equal(forms[0].requireSignature, true);
+});
+
+test("includes a signature-required example form", () => {
+  const signatureForm = initialFormTemplates.find((form) => form.id === "form-service-consent-signature");
+
+  assert.equal(signatureForm.name, "Service Consent Signature");
+  assert.equal(signatureForm.requireSignature, true);
+});
+
 test("deletes a form after confirmation path calls delete helper", () => {
   const forms = deleteFormTemplate(initialFormTemplates, "form-client-intake");
   assert.equal(forms.some((form) => form.id === "form-client-intake"), false);
