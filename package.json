@@ -1,0 +1,11 @@
+{
+  "name": "client-consultation",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "node --check src/main.js && node --check src/formTemplates.js",
+    "test": "node --test src/*.test.js",
+    "start": "python3 -m http.server 4174 --bind 127.0.0.1"
+  }
+}
